@@ -20,7 +20,6 @@ MESOS_IP=$1
 # add the current dir to PATH
 bin=$(cd $(dirname $0) && pwd -P)
 export PATH=$PATH:${bin}
-
 # validate required scripts
 cmd-exists "await-connection"
 
@@ -31,13 +30,12 @@ k8sm_bin=$(cd $(dirname ${bin})/k8sm-bin && pwd -P)
 # validate required binaries
 cmd-exists "km"
 
-PUBLIC_IP=$(publicip)
-PUBLIC_IP=127.0.0.1
+PUBLIC_IP=`/sbin/ip route|grep -v default | grep eth0 | awk '{ print $NF }'`
 
 set -e
 
 #export K8SM_IP=${PUBLIC_IP}
-export K8SM_IP=0.0.0.0
+export K8SM_IP=${PUBLIC_IP}
 export K8SM_PORT=8888
 echo "Kubernetes: ${K8SM_IP}:${K8SM_PORT}"
 
@@ -55,7 +53,7 @@ go version
 
 etcd & > ${LOG_DIR}/etcd.log &
 add_subproc "$!" "etcd"
-export ETCD_IP=${ETCD_IP:-$PUBLIC_IP}
+export ETCD_IP=${ETCD_IP:-localhost}
 export ETCD_PORT=${ETCD_PORT:-4001}
 export ETCD_URL=http://${ETCD_IP}:${ETCD_PORT}
 echo "Etcd: ${ETCD_URL}"
@@ -63,9 +61,10 @@ echo "Etcd: ${ETCD_URL}"
 
 K8SM_CONFIG="$(pwd)/mesos-cloud.conf"
 echo "Config: ${K8SM_CONFIG}"
-if [ ! -f "$K8SM_CONFIG" ]; then
+if grep "TO_BE_REPLACED" $K8SM_CONFIG; then
     echo "Writing default config"
     echo "[mesos-cloud]
+        mesos-master = ${MESOS_IP}:5050
         http-client-timeout = 5s
         state-cache-ttl     = 20s
     " > ${K8SM_CONFIG}
@@ -98,12 +97,13 @@ echo "---------------------"
 
 echo "Starting km apiserver &> ${LOG_DIR}/apiserver.log"
 km apiserver \
-  --address=${K8SM_IP} \
+  --address=${PUBLIC_IP} \
   --etcd_servers=${ETCD_URL} \
   --portal_net=10.10.20.0/24 \
   --port=${K8SM_PORT} \
   --cloud_provider=mesos \
   --cloud_config=${K8SM_CONFIG} \
+  --v=4\
   &> ${LOG_DIR}/apiserver.log \
   &
 add_subproc "$!" "km apiserver"
@@ -114,8 +114,9 @@ echo "---------------------"
 
 echo "Starting km controller-manager &> ${LOG_DIR}/controller-manager.log"
 km controller-manager \
-  --master=${K8SM_IP}:${K8SM_PORT} \
+  --master=${PUBLIC_IP}:${K8SM_PORT} \
   --cloud_config=${K8SM_CONFIG} \
+  --v=4 \
   &> ${LOG_DIR}/controller-manager.log \
   &
 add_subproc "$!" "km controller-manager"
@@ -128,7 +129,11 @@ km scheduler \
   --address=${K8SM_IP} \
   --etcd_servers=${ETCD_URL} \
   --mesos_user=root \
-  --api_servers=${K8SM_IP}:${K8SM_PORT} \
+  --api_servers=${PUBLIC_IP}:${K8SM_PORT} \
+  --framework_name="Kubernetes_Docker" \
+  --driver_port=10255 \
+  --hostname_override=k8sm-in-docker.geekscoffee.com
+  --v=4 \
   &> ${LOG_DIR}/scheduler.log \
   &
 add_subproc "$!" "km scheduler"
